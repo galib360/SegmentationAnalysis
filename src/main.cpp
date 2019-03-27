@@ -18,13 +18,14 @@ using namespace std::chrono;
 float confThreshold = 0.5; // Confidence threshold
 float maskThreshold = 0.8; // Underestimation mask; more, the smaller the mask
 float maskThreshold2 = 0.15;// Overestimation mask; less, the bigger the mask
-int nFrames = 201;//Number of frames in a set
-int view = 8;//Number of sets
+int nFrames = 410;//Number of frames in a set
+int view = 16;//Number of sets
 int startView = 0;//Starting set, will run until it reaches the number of sets(View), Has to have same no. of frames
 int startFrame =0;
 int rectPad = 10;
-float R =0, P=0, F=0, A=0;//Total evaluation
+float R =0, P=0, F=0, A=0;//Final average evaluations
 Rect BB;
+string inputdir = "child_rope";
 ofstream myfile;
 
 
@@ -45,6 +46,12 @@ int main()
 {
 
 	high_resolution_clock::time_point t1 = high_resolution_clock::now();
+
+
+	string resultdir = inputdir+"/result.txt";
+	myfile.open(resultdir);
+	myfile << inputdir << endl;
+	myfile << ""<<endl;
 
 	// Load names of classes
     string classesFile = "mscoco_labels.names";
@@ -91,17 +98,17 @@ int main()
 //					+ to_string(countFrame) + ".png";
 
 			if (countView < 10) {
-				pathData = "dancer4D/data/cam0" + to_string(countView) + "/"
+				pathData = inputdir+"/data/cam0" + to_string(countView) + "/"
 						+ to_string(countFrame) + ".png";
 
-				pathGT = "dancer4D/Ground/cam0" + to_string(countView) + "/"
-						+ to_string(countFrame) + ".pbm";
+				pathGT = inputdir+"/Ground/cam0" + to_string(countView) + "/"
+						+ to_string(countFrame) + ".png";
 
 			} else if (countView >= 10) {
-				pathData = "dancer4D/data/cam" + to_string(countView) + "/"
+				pathData = inputdir+"/data/cam" + to_string(countView) + "/"
 						+ to_string(countFrame) + ".png";
 
-				pathGT = "dancer4D/Ground/cam" + to_string(countView) + "/"
+				pathGT = inputdir+"/Ground/cam" + to_string(countView) + "/"
 						+ to_string(countFrame) + ".pbm";
 
 			}
@@ -112,7 +119,7 @@ int main()
 //			pathGT = "dancer4D/Ground/cam0" + to_string(countView) + "/"+ to_string(countFrame) + ".pbm";
 
 			frame = imread(pathData);//original picture to estimate silhouette
-			silGT = imread(pathGT);//Ground truth silhouette
+			silGT = imread(pathGT, IMREAD_GRAYSCALE);//Ground truth silhouette
 
 			//resize(frame, frame, cv::Size(), 0.5, 0.5);
 			//frame.convertTo(frame, -1, alpha, beta);
@@ -141,7 +148,7 @@ int main()
 
 			//Evaluation code goes here ------------>
 
-			cvtColor( silGT, silGT, CV_BGR2GRAY );
+			//cvtColor( silGT, silGT, CV_BGR2GRAY );
 			//cvtColor( silEst, silEst, CV_BGR2GRAY );
 			cv::threshold(silGT, silGT, 20, 255, cv::THRESH_BINARY);
 			cv::threshold(silEst, silEst, 20, 255, cv::THRESH_BINARY);
@@ -161,19 +168,19 @@ int main()
 			float tn = 0, fp = 0, fn = 0, tp = 0;
 			float recall, precision, f1, accuracy;
 
-			int countG =0;
-			int countE =0;
-			for(int row =0; row<silGT.rows; row++){
-				for(int col =0; col<silGT.cols; col++){
-					if (silGT.at<uchar>(row,col)!=0){
-						countG++;
-					}
-					if (silEst.at<uchar>(row, col) != 0) {
-						countE++;
-					}
-
-				}
-			}
+//			int countG =0;
+//			int countE =0;
+//			for(int row =0; row<silGT.rows; row++){
+//				for(int col =0; col<silGT.cols; col++){
+//					if (silGT.at<uchar>(row,col)!=0){
+//						countG++;
+//					}
+//					if (silEst.at<uchar>(row, col) != 0) {
+//						countE++;
+//					}
+//
+//				}
+//			}
 
 //			for (int row = 0; row < silGT.rows; row++) {
 //				for (int col = 0; col < silGT.cols; col++) {
@@ -240,9 +247,7 @@ int main()
 		Fset = Fset/nFrames;
 		Aset = Aset/nFrames;
 
-		myfile.open("result.txt");
-		myfile<<"Dancer4D"<<endl;
-		myfile<<""<<endl;
+
 
 		cout << "for set0" << countView<< ": "<< endl;
 		cout << "Recall: " << Rset << endl;
@@ -289,8 +294,10 @@ int main()
 
 	auto durationms = duration_cast<milliseconds>(t2 - t1).count();
 	auto durations = duration_cast<seconds>(t2 - t1).count();
-	cout << "Total code execution time: " << durationms << " ms" << endl;
-	cout <<"Total code execution time: " <<durations<<" sec"<<endl;
+	auto durationmin = duration_cast<minutes>(t2 - t1).count();
+	cout << "Total code execution time: " << durationms << " milliseconds" << endl;
+	cout <<"Total code execution time: " <<durations<<" seconds"<<endl;
+	cout <<"Total code execution time: " <<durationmin<<" minutes"<<endl;
 
     return 0;
 }
@@ -471,10 +478,10 @@ Mat postprocess(Mat& frame, const vector<Mat>& outs, int& countFrame, int& count
 
             string outputPath;
             if(countView<10){
-            	outputPath = "dancer4D/Est/cam0" + to_string(countView)+ "/"+to_string(countFrame)+".png";
+            	outputPath = inputdir+"/Est/cam0" + to_string(countView)+ "/"+to_string(countFrame)+".png";
             }
             else if(countView>=10){
-            	outputPath = "dancer4D/Est/cam" + to_string(countView)+ "/"+to_string(countFrame)+".png";
+            	outputPath = inputdir+"/Est/cam" + to_string(countView)+ "/"+to_string(countFrame)+".png";
             }
 
 //            string outputPath = "dancer4D/Est/cam0" + to_string(countView)+ "/"+to_string(countFrame)+".png";
