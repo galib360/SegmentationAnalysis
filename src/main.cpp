@@ -8,6 +8,11 @@
 #include <opencv2/highgui.hpp>
 #include <chrono>
 
+#include "densecrf.h"
+#include <cstdio>
+#include <cmath>
+#include "util.h"
+
 
 using namespace cv;
 using namespace dnn;
@@ -18,9 +23,9 @@ using namespace std::chrono;
 float confThreshold = 0.5; // Confidence threshold
 float maskThreshold = 0.8; // Underestimation mask; more, the smaller the mask
 float maskThreshold2 = 0.15;// Overestimation mask; less, the bigger the mask
-int nFrames = 410;//Number of frames in a set
-int view = 8;//Number of sets
-int startView = 7;//Starting set, will run until it reaches the number of sets(View), Has to have same no. of frames
+int nFrames = 1;//Number of frames in a set
+int view = 1;//Number of sets
+int startView = 0;//Starting set, will run until it reaches the number of sets(View), Has to have same no. of frames
 int startFrame =0;
 int rectPad = 10;
 float R =0, P=0, F=0, A=0;//Final average evaluations
@@ -42,6 +47,161 @@ void drawBox(Mat& frame, int classId, float conf, Rect box, Mat& objectMask);
 // Postprocess the neural network's output for each frame
 Mat postprocess(Mat& frame, const vector<Mat>& outs, int& countFrame, int& countView, Rect& BB);
 
+static void onMouse(int event, int x, int y, int flags, void* param) // now it's in param
+{
+    Mat &xyz = *((Mat*)param); //cast and deref the param
+
+    if (event == EVENT_LBUTTONDOWN)
+    {
+        Vec3b val = xyz.at< Vec3b >(y,x); // opencv is row-major !
+        cout << "x= " << x << " y= " << y << "val= "<<val<< endl;
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////
+int nColors = 0;
+int colorscrf[255];
+unsigned int getColor( const unsigned char * c ){
+//	cout<<"value from get color : "<<c[0] + 256*c[1] + 256*256*c[2]<<endl;
+	return c[0] + 256*c[1] + 256*256*c[2];
+}
+void putColor( unsigned char * c, unsigned int cc ){
+	c[0] = cc&0xff; c[1] = (cc>>8)&0xff; c[2] = (cc>>16)&0xff;
+}
+// Produce a color image from a bunch of labels
+unsigned char * colorize( const short * map, int W, int H ){
+	unsigned char * r = new unsigned char[ W*H*3 ];
+	for( int k=0; k<W*H; k++ ){
+		int c = colorscrf[ map[k] ];
+		putColor( r+3*k, c );
+	}
+	return r;
+}
+
+// Certainty that the groundtruth is correct
+const float GT_PROB = 0.5;
+
+// Simple classifier that is 50% certain that the annotation is correct
+float * classify( const unsigned char * im, int W, int H, int M ){
+	const float u_energy = -log( 1.0f / M );
+	const float n_energy = -log( (1.0f - GT_PROB) / (M-1) );
+	const float p_energy = -log( GT_PROB );
+	float * res = new float[W*H*M];
+	for( int k=0; k<W*H; k++ ){
+		// Map the color to a label
+		int c = getColor( im + 3*k );
+		int i;
+		for( i=0;i<nColors && c!=colorscrf[i]; i++ );
+		if (c && i==nColors){
+			if (i<M)
+				colorscrf[nColors++] = c;
+			else
+				c=0;
+		}
+
+		// Set the energy
+		float * r = res + k*M;
+		if (c){
+			for( int j=0; j<M; j++ )
+				r[j] = n_energy;
+			r[i] = p_energy;
+		}
+		else{
+			for( int j=0; j<M; j++ )
+				r[j] = u_energy;
+		}
+	}
+	return res;
+}
+
+uchar *MatToBytes(Mat& image) {
+	//class data members
+	int image_rows = image.rows;
+	int image_cols = image.cols;
+	int image_type = image.type();
+
+	int image_size = image.total() * image.elemSize();
+	uchar * image_uchar = new uchar[image_size];
+
+	std::vector<uchar> v_char;
+	for (int i = 0; i < image.rows; i++) {
+		for (int j = 0; j < image.cols; j++) {
+			v_char.push_back(*(uchar*) (image.data + i + j));
+		}
+	}
+	//image_uchar is a class data member
+	image_uchar = &v_char[0];
+
+	//cvWaitKey(5000);
+	return image_uchar;
+}
+
+int DenseCRF( Mat& dataim, Mat& annoim, string out ){
+
+	// Number of labels
+	const int M = 21;
+	// Load the color image and some crude annotations (which are used in a simple classifier)
+	int W = dataim.cols;
+	int H = dataim.rows;
+	int GW = annoim.cols;
+	int GH = annoim.rows;
+//	unsigned char * im = MatToBytes(dataim);
+	unsigned char * im = dataim.data;
+	if (!im){
+		printf("Failed to load image!\n");
+		return 1;
+	}
+//	unsigned char * anno = MatToBytes(annoim);
+	unsigned char * anno = annoim.data;
+	if (!anno){
+		printf("Failed to load annotations!\n");
+		return 1;
+	}
+
+
+	/////////// Put your own unary classifier here! ///////////
+	float * unary = classify( anno, W, H, M );
+	///////////////////////////////////////////////////////////
+
+	// Setup the CRF model
+	DenseCRF2D crf(W, H, M);
+	// Specify the unary potential as an array of size W*H*(#classes)
+	// packing order: x0y0l0 x0y0l1 x0y0l2 .. x1y0l0 x1y0l1 ...
+	crf.setUnaryEnergy( unary );
+	// add a color independent term (feature = pixel location 0..W-1, 0..H-1)
+	// x_stddev = 3
+	// y_stddev = 3
+	// weight = 3
+	crf.addPairwiseGaussian( 3, 3, 3 );
+	// add a color dependent term (feature = xyrgb)
+	// x_stddev = 60
+	// y_stddev = 60
+	// r_stddev = g_stddev = b_stddev = 20
+	// weight = 10
+	crf.addPairwiseBilateral( 60, 60, 20, 20, 20, im, 10 );
+
+	// Do map inference
+	short * map = new short[W*H];
+	crf.map(10, map);
+
+	// Store the result
+	unsigned char *res = colorize( map, W, H );
+	Mat crfres = Mat(H, W, CV_8UC3, res);
+
+//	crfres.data = res;
+	imwrite(out, crfres);
+	imwrite("data.png", dataim);
+	//writePPM( argv[3], W, H, res );
+
+	delete[] im;
+	delete[] anno;
+	delete[] res;
+	delete[] map;
+	delete[] unary;
+	return 1;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
 int main()
 {
 
@@ -354,6 +514,74 @@ Mat postprocess(Mat& frame, const vector<Mat>& outs, int& countFrame, int& count
 //			waitKey(0);
 			Mat fg = Mat::zeros(frame.rows, frame.cols, CV_8U);
 			Mat fg2 = Mat::zeros(frame.rows, frame.cols, CV_8U);
+
+			//for CRF
+			Mat crf(frame.rows, frame.cols, CV_8UC3);
+			Mat crf2(frame.rows, frame.cols, CV_8UC3);
+			crf.setTo(cv::Scalar(0,200,0));
+			crf2.setTo(cv::Scalar(0,200,0));
+
+			Mat maskcrf(mask.rows, mask.cols, CV_8UC3);
+			Mat maskcrf2(mask2.rows, mask2.cols, CV_8UC3);
+			for(int r =0; r<maskcrf.rows; r++){
+				for(int c =0; c<maskcrf.cols; c++){
+					if(mask.at<uchar>(r,c)==0){
+						maskcrf.at<Vec3b>(r,c) = Vec3b(0,200,0);
+					}
+					if (mask2.at<uchar>(r, c) == 0) {
+						maskcrf2.at<Vec3b>(r, c) = Vec3b(0,200,0);
+					}
+					if (mask.at<uchar>(r, c) != 0) {
+						maskcrf.at<Vec3b>(r, c) = Vec3b(0,50,0);
+					}
+					if (mask2.at<uchar>(r, c) != 0) {
+						maskcrf2.at<Vec3b>(r, c) = Vec3b(0,0,0);
+					}
+				}
+			}
+
+
+//			imshow("maskcrf",maskcrf);
+//			imshow("maskcrf2",maskcrf2);
+
+
+
+			maskcrf2.copyTo(crf2(box));
+			maskcrf.copyTo(crf(box));
+
+//			imshow("crf", crf);
+//			imshow("crf2", crf2);
+//			waitKey(0);
+
+
+//			addWeighted( crf, 0.5, crf2, 0.5, 0.0, crf);
+			addWeighted( crf, 1, crf2, 2, 0.0, crf);
+
+
+//			namedWindow("ImageDisplay", WINDOW_NORMAL);
+//
+//
+//			setMouseCallback("ImageDisplay", onMouse, &crf);
+//			imshow("ImageDisplay", crf);
+//			waitKey(0);
+
+			for (int r = 0; r<crf.rows; r++){
+				for(int c=0; c<crf.cols; c++){
+					if (crf.at<Vec3b>(r,c)==Vec3b(0,200,0)){
+						crf.at<Vec3b>(r,c)=Vec3b(0,0,0);
+					}
+				}
+			}
+//			imwrite("anno.ppm", crf);
+//			imwrite("anno5.png", crf);
+//			imwrite("data5.png", frame);
+//			imshow("crf", crf);
+//			waitKey(0);
+			int extra = DenseCRF(frame, crf, "crfout.png");
+
+
+			/////////////////////////////////
+
 			try {
 				mask.copyTo(fg(box));
 				mask2.copyTo(fg2(box));
