@@ -21,9 +21,9 @@ using namespace std::chrono;
 
 // Initialize the parameters
 float confThreshold = 0.5; // Confidence threshold
-float maskThreshold = 0.8; // Underestimation mask; more, the smaller the mask
-float maskThreshold2 = 0.15;// Overestimation mask; less, the bigger the mask
-int nFrames = 1;//Number of frames in a set
+float maskThreshold = 0.75; // Underestimation mask; more, the smaller the mask
+float maskThreshold2 = 0.25;// Overestimation mask; less, the bigger the mask
+int nFrames = 23;//Number of frames in a set
 int view = 1;//Number of sets
 int startView = 0;//Starting set, will run until it reaches the number of sets(View), Has to have same no. of frames
 int startFrame =0;
@@ -32,6 +32,7 @@ float R =0, P=0, F=0, A=0;//Final average evaluations
 Rect BB;
 string inputdir = "child_rope";
 ofstream myfile;
+static int docrf =1;
 
 
 ////For manipulating brightness and contrast
@@ -114,32 +115,12 @@ float * classify( const unsigned char * im, int W, int H, int M ){
 	return res;
 }
 
-uchar *MatToBytes(Mat& image) {
-	//class data members
-	int image_rows = image.rows;
-	int image_cols = image.cols;
-	int image_type = image.type();
 
-	int image_size = image.total() * image.elemSize();
-	uchar * image_uchar = new uchar[image_size];
 
-	std::vector<uchar> v_char;
-	for (int i = 0; i < image.rows; i++) {
-		for (int j = 0; j < image.cols; j++) {
-			v_char.push_back(*(uchar*) (image.data + i + j));
-		}
-	}
-	//image_uchar is a class data member
-	image_uchar = &v_char[0];
-
-	//cvWaitKey(5000);
-	return image_uchar;
-}
-
-int DenseCRF( Mat& dataim, Mat& annoim, string out ){
+Mat DenseCRF( Mat& dataim, Mat& annoim, string out ){
 
 	// Number of labels
-	const int M = 21;
+	const int M = 11;
 	// Load the color image and some crude annotations (which are used in a simple classifier)
 	int W = dataim.cols;
 	int H = dataim.rows;
@@ -149,13 +130,13 @@ int DenseCRF( Mat& dataim, Mat& annoim, string out ){
 	unsigned char * im = dataim.data;
 	if (!im){
 		printf("Failed to load image!\n");
-		return 1;
+//		return 1;
 	}
 //	unsigned char * anno = MatToBytes(annoim);
 	unsigned char * anno = annoim.data;
 	if (!anno){
 		printf("Failed to load annotations!\n");
-		return 1;
+//		return 1;
 	}
 
 
@@ -190,15 +171,17 @@ int DenseCRF( Mat& dataim, Mat& annoim, string out ){
 
 //	crfres.data = res;
 	imwrite(out, crfres);
-	imwrite("data.png", dataim);
+//	imwrite("data.png", dataim);
 	//writePPM( argv[3], W, H, res );
+//	imshow("crfresultinfn", crfres);
+//	waitKey(0);
 
-	delete[] im;
-	delete[] anno;
-	delete[] res;
-	delete[] map;
-	delete[] unary;
-	return 1;
+//	delete[] im;
+//	delete[] anno;
+//	delete[] res;
+//	delete[] map;
+//	delete[] unary;
+	return crfres;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -260,9 +243,15 @@ int main()
 			if (countView < 10) {
 				pathData = inputdir+"/data/cam0" + to_string(countView) + "/"
 						+ to_string(countFrame) + ".png";
+				//for experiment:
+//				pathData = inputdir+"/data/cam0" + to_string(countView) + "/"
+//										+ to_string(countFrame) + ".jpg";
 
 				pathGT = inputdir+"/Ground/cam0" + to_string(countView) + "/"
 						+ to_string(countFrame) + ".png";
+				//for dancer4D, below:
+//				pathGT = inputdir+"/Ground/cam0" + to_string(countView) + "/"
+//										+ to_string(countFrame) + ".pbm";
 
 			} else if (countView >= 10) {
 				pathData = inputdir+"/data/cam" + to_string(countView) + "/"
@@ -270,6 +259,9 @@ int main()
 
 				pathGT = inputdir+"/Ground/cam" + to_string(countView) + "/"
 						+ to_string(countFrame) + ".png";
+				//for dancer4D, below:
+//				pathGT = inputdir+"/Ground/cam" + to_string(countView) + "/"
+//										+ to_string(countFrame) + ".pbm";
 
 			}
 
@@ -555,7 +547,8 @@ Mat postprocess(Mat& frame, const vector<Mat>& outs, int& countFrame, int& count
 
 
 //			addWeighted( crf, 0.5, crf2, 0.5, 0.0, crf);
-			addWeighted( crf, 1, crf2, 2, 0.0, crf);
+			Mat crfmerged;
+			addWeighted( crf, 1, crf2, 2, 0.0, crfmerged);
 
 
 //			namedWindow("ImageDisplay", WINDOW_NORMAL);
@@ -565,10 +558,10 @@ Mat postprocess(Mat& frame, const vector<Mat>& outs, int& countFrame, int& count
 //			imshow("ImageDisplay", crf);
 //			waitKey(0);
 
-			for (int r = 0; r<crf.rows; r++){
-				for(int c=0; c<crf.cols; c++){
-					if (crf.at<Vec3b>(r,c)==Vec3b(0,200,0)){
-						crf.at<Vec3b>(r,c)=Vec3b(0,0,0);
+			for (int r = 0; r<crfmerged.rows; r++){
+				for(int c=0; c<crfmerged.cols; c++){
+					if (crfmerged.at<Vec3b>(r,c)==Vec3b(0,200,0)){
+						crfmerged.at<Vec3b>(r,c)=Vec3b(0,0,0);
 					}
 				}
 			}
@@ -577,7 +570,53 @@ Mat postprocess(Mat& frame, const vector<Mat>& outs, int& countFrame, int& count
 //			imwrite("data5.png", frame);
 //			imshow("crf", crf);
 //			waitKey(0);
-			int extra = DenseCRF(frame, crf, "crfout.png");
+			Mat crfoutput = DenseCRF(frame, crfmerged, "crfout.png");
+
+//			imshow("crfoutfromdense", crfoutput);
+//			waitKey(0);
+			for(int r =0; r<crfoutput.rows; r++){
+				for(int c=0; c< crfoutput.cols; c++){
+
+					if(crfoutput.at<Vec3b>(r,c)==Vec3b(0,255,0)){
+						crfoutput.at<Vec3b>(r,c)=Vec3b(0,0,0);
+					}
+					else if(crfoutput.at<Vec3b>(r,c)==Vec3b(0,50,0)){
+						crfoutput.at<Vec3b>(r,c)=Vec3b(255,255,255);
+					}
+				}
+			}
+			Mat crfoutputG;
+			cvtColor(crfoutput, crfoutputG, CV_BGR2GRAY);
+//			imshow("crfsil", crfoutput);
+//			waitKey(0);
+
+			//Closing
+			int morph_size = 1;
+			Mat element = getStructuringElement( MORPH_RECT, Size( 2*morph_size + 1, 2*morph_size+1 ), Point( morph_size, morph_size ) );
+//			Mat dst;
+			for (int i = 1; i < 3; i++) {
+				morphologyEx(crfoutputG, crfoutputG, MORPH_CLOSE, element, Point(-1, -1), i);
+				//morphologyEx( src, dst, MORPH_TOPHAT, element ); // here iteration=1
+//				imshow("source", crfoutputG);
+//				imshow("result", dst);
+//				waitKey(0);
+			}
+
+			if (docrf == 1) {
+				string outputPath;
+				if (countView < 10) {
+					outputPath = inputdir + "/Crf/cam0" + to_string(countView)
+							+ "/" + to_string(countFrame) + ".png";
+				} else if (countView >= 10) {
+					outputPath = inputdir + "/Crf/cam" + to_string(countView)
+							+ "/" + to_string(countFrame) + ".png";
+				}
+				imwrite(outputPath, crfoutputG);
+
+				return crfoutputG;
+
+			}
+
 
 
 			/////////////////////////////////
