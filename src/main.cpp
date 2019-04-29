@@ -22,9 +22,9 @@ using namespace std::chrono;
 // Initialize the parameters
 float confThreshold = 0.5; // Confidence threshold
 float maskThreshold = 0.75; // Underestimation mask; more, the smaller the mask
-float maskThreshold2 = 0.25;// Overestimation mask; less, the bigger the mask
-int nFrames = 23;//Number of frames in a set
-int view = 1;//Number of sets
+float maskThreshold2 = 0.15;// Overestimation mask; less, the bigger the mask
+int nFrames = 410;//Number of frames in a set
+int view = 16;//Number of sets
 int startView = 0;//Starting set, will run until it reaches the number of sets(View), Has to have same no. of frames
 int startFrame =0;
 int rectPad = 10;
@@ -33,6 +33,10 @@ Rect BB;
 string inputdir = "child_rope";
 ofstream myfile;
 static int docrf =1;
+static int doeval =1;
+
+unsigned char * im;
+unsigned char * anno;
 
 
 ////For manipulating brightness and contrast
@@ -119,21 +123,25 @@ float * classify( const unsigned char * im, int W, int H, int M ){
 
 Mat DenseCRF( Mat& dataim, Mat& annoim, string out ){
 
+
+	high_resolution_clock::time_point t1 = high_resolution_clock::now();
 	// Number of labels
-	const int M = 11;
+	const int M = 21;
 	// Load the color image and some crude annotations (which are used in a simple classifier)
 	int W = dataim.cols;
 	int H = dataim.rows;
 	int GW = annoim.cols;
 	int GH = annoim.rows;
 //	unsigned char * im = MatToBytes(dataim);
-	unsigned char * im = dataim.data;
+//	unsigned char * im = dataim.data;
+	im = dataim.data;
 	if (!im){
 		printf("Failed to load image!\n");
 //		return 1;
 	}
 //	unsigned char * anno = MatToBytes(annoim);
-	unsigned char * anno = annoim.data;
+//	unsigned char * anno = annoim.data;
+	anno = annoim.data;
 	if (!anno){
 		printf("Failed to load annotations!\n");
 //		return 1;
@@ -159,7 +167,8 @@ Mat DenseCRF( Mat& dataim, Mat& annoim, string out ){
 	// y_stddev = 60
 	// r_stddev = g_stddev = b_stddev = 20
 	// weight = 10
-	crf.addPairwiseBilateral( 60, 60, 20, 20, 20, im, 10 );
+	// less stddev gives better segmentation
+	crf.addPairwiseBilateral( 50, 50, 5, 5, 5, im, 20 );
 
 	// Do map inference
 	short * map = new short[W*H];
@@ -178,9 +187,20 @@ Mat DenseCRF( Mat& dataim, Mat& annoim, string out ){
 
 //	delete[] im;
 //	delete[] anno;
-//	delete[] res;
-//	delete[] map;
-//	delete[] unary;
+	delete[] res;
+	delete[] map;
+	delete[] unary;
+
+	high_resolution_clock::time_point t2 = high_resolution_clock::now();
+
+	auto durationms = duration_cast<milliseconds>(t2 - t1).count();
+	auto durations = duration_cast<seconds>(t2 - t1).count();
+
+//	cout << "dense CRF execution time: " << durationms << " milliseconds"
+//			<< endl;
+//	cout << "dense CRF execution time: " << durations << " seconds" << endl;
+
+
 	return crfres;
 }
 
@@ -273,6 +293,10 @@ int main()
 			frame = imread(pathData);//original picture to estimate silhouette
 			silGT = imread(pathGT, IMREAD_GRAYSCALE);//Ground truth silhouette
 
+			//if resize needed, for large pictures
+//			resize(frame, frame, cv::Size(frame.cols * 0.3,frame.rows * 0.3), 0, 0, CV_INTER_LINEAR);
+//			resize(silGT, silGT, cv::Size(), 0.4, 0.4);
+
 			//resize(frame, frame, cv::Size(), 0.5, 0.5);
 			//frame.convertTo(frame, -1, alpha, beta);
 
@@ -351,19 +375,23 @@ int main()
 			int height = BB.height;
 			int width = BB.width;
 
-			for(int row =y; row<y+height; row++){
-				for(int col =x; col<x+width; col++){
-					if (silGT.at<uchar>(row, col) == 0 && silEst.at<uchar>(row, col)!=0){
-						fp+=1;
-					}
-					else if (silGT.at<uchar>(row, col) != 0 && silEst.at<uchar>(row, col)==0){
-						fn+=1;
-					}
-					else if (silGT.at<uchar>(row, col) != 0 && silEst.at<uchar>(row, col)!=0){
-						tp+=1;
-					}
-					else if (silGT.at<uchar>(row, col) == 0 && silEst.at<uchar>(row, col)==0){
-						tn+=1;
+			if (doeval == 1) {
+
+				for (int row = y; row < y + height; row++) {
+					for (int col = x; col < x + width; col++) {
+						if (silGT.at<uchar>(row, col) == 0
+								&& silEst.at<uchar>(row, col) != 0) {
+							fp += 1;
+						} else if (silGT.at<uchar>(row, col) != 0
+								&& silEst.at<uchar>(row, col) == 0) {
+							fn += 1;
+						} else if (silGT.at<uchar>(row, col) != 0
+								&& silEst.at<uchar>(row, col) != 0) {
+							tp += 1;
+						} else if (silGT.at<uchar>(row, col) == 0
+								&& silEst.at<uchar>(row, col) == 0) {
+							tn += 1;
+						}
 					}
 				}
 			}
@@ -535,11 +563,27 @@ Mat postprocess(Mat& frame, const vector<Mat>& outs, int& countFrame, int& count
 
 //			imshow("maskcrf",maskcrf);
 //			imshow("maskcrf2",maskcrf2);
+//			waitKey(0);
 
 
 
-			maskcrf2.copyTo(crf2(box));
-			maskcrf.copyTo(crf(box));
+			try {
+				maskcrf2.copyTo(crf2(box));
+				maskcrf.copyTo(crf(box));
+			} catch (Exception e) {
+				cout<<"could not copy box to crf frame"<<endl;
+				Mat mask_fgpf(frame.size(), CV_8UC1, Scalar(0));
+				string outputPath;
+				if (countView < 10) {
+					outputPath = inputdir + "/Crf/cam0" + to_string(countView)
+							+ "/" + to_string(countFrame) + ".png";
+				} else if (countView >= 10) {
+					outputPath = inputdir + "/Crf/cam" + to_string(countView)
+							+ "/" + to_string(countFrame) + ".png";
+				}
+				imwrite(outputPath, mask_fgpf);
+				return mask_fgpf;
+			}
 
 //			imshow("crf", crf);
 //			imshow("crf2", crf2);
@@ -591,16 +635,16 @@ Mat postprocess(Mat& frame, const vector<Mat>& outs, int& countFrame, int& count
 //			waitKey(0);
 
 			//Closing
-			int morph_size = 1;
-			Mat element = getStructuringElement( MORPH_RECT, Size( 2*morph_size + 1, 2*morph_size+1 ), Point( morph_size, morph_size ) );
-//			Mat dst;
-			for (int i = 1; i < 3; i++) {
-				morphologyEx(crfoutputG, crfoutputG, MORPH_CLOSE, element, Point(-1, -1), i);
-				//morphologyEx( src, dst, MORPH_TOPHAT, element ); // here iteration=1
-//				imshow("source", crfoutputG);
-//				imshow("result", dst);
-//				waitKey(0);
-			}
+//			int morph_size = 1;
+//			Mat element = getStructuringElement( MORPH_RECT, Size( 2*morph_size + 1, 2*morph_size+1 ), Point( morph_size, morph_size ) );
+////			Mat dst;
+//			for (int i = 1; i < 3; i++) {
+//				morphologyEx(crfoutputG, crfoutputG, MORPH_CLOSE, element, Point(-1, -1), i);
+//				//morphologyEx( src, dst, MORPH_TOPHAT, element ); // here iteration=1
+////				imshow("source", crfoutputG);
+////				imshow("result", dst);
+////				waitKey(0);
+//			}
 
 			if (docrf == 1) {
 				string outputPath;
