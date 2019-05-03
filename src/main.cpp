@@ -23,17 +23,18 @@ using namespace std::chrono;
 float confThreshold = 0.5; // Confidence threshold
 float maskThreshold = 0.75; // Underestimation mask; more, the smaller the mask
 float maskThreshold2 = 0.15;// Overestimation mask; less, the bigger the mask
-int nFrames = 410;//Number of frames in a set
-int view = 16;//Number of sets
+int nFrames = 31;//Number of frames in a set
+int view = 8;//Number of sets
 int startView = 0;//Starting set, will run until it reaches the number of sets(View), Has to have same no. of frames
 int startFrame =0;
 int rectPad = 10;
 float R =0, P=0, F=0, A=0;//Final average evaluations
 Rect BB;
-string inputdir = "child_rope";
+string inputdir = "Costume3Walk";
 ofstream myfile;
 static int docrf =1;
-static int doeval =1;
+static int doeval =0;
+static int domorpho =0;
 
 unsigned char * im;
 unsigned char * anno;
@@ -121,7 +122,7 @@ float * classify( const unsigned char * im, int W, int H, int M ){
 
 
 
-Mat DenseCRF( Mat& dataim, Mat& annoim, string out ){
+void DenseCRF( Mat& dataim, Mat& annoim, string out, Mat& crfres ){
 
 
 	high_resolution_clock::time_point t1 = high_resolution_clock::now();
@@ -168,7 +169,8 @@ Mat DenseCRF( Mat& dataim, Mat& annoim, string out ){
 	// r_stddev = g_stddev = b_stddev = 20
 	// weight = 10
 	// less stddev gives better segmentation
-	crf.addPairwiseBilateral( 50, 50, 5, 5, 5, im, 20 );
+//	crf.addPairwiseBilateral( 50, 50, 5, 5, 5, im, 20 );
+	crf.addPairwiseBilateral( 80, 80, 13, 13, 13, im, 10 );
 
 	// Do map inference
 	short * map = new short[W*H];
@@ -176,10 +178,10 @@ Mat DenseCRF( Mat& dataim, Mat& annoim, string out ){
 
 	// Store the result
 	unsigned char *res = colorize( map, W, H );
-	Mat crfres = Mat(H, W, CV_8UC3, res);
+	crfres = Mat(H, W, CV_8UC3, res);
 
 //	crfres.data = res;
-	imwrite(out, crfres);
+//	imwrite(out, crfres);
 //	imwrite("data.png", dataim);
 	//writePPM( argv[3], W, H, res );
 //	imshow("crfresultinfn", crfres);
@@ -201,7 +203,7 @@ Mat DenseCRF( Mat& dataim, Mat& annoim, string out ){
 //	cout << "dense CRF execution time: " << durations << " seconds" << endl;
 
 
-	return crfres;
+//	return crfres;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -477,6 +479,10 @@ int main()
 	myfile << " " << endl;
 	myfile.close();
 
+
+	delete[] im;
+	delete[] anno;
+
     high_resolution_clock::time_point t2 = high_resolution_clock::now();
 
 	auto durationms = duration_cast<milliseconds>(t2 - t1).count();
@@ -614,12 +620,14 @@ Mat postprocess(Mat& frame, const vector<Mat>& outs, int& countFrame, int& count
 //			imwrite("data5.png", frame);
 //			imshow("crf", crf);
 //			waitKey(0);
-			Mat crfoutput = DenseCRF(frame, crfmerged, "crfout.png");
+			Mat crfoutput;
+			DenseCRF(frame, crfmerged, "crfout.png", crfoutput);
 
 //			imshow("crfoutfromdense", crfoutput);
 //			waitKey(0);
 			for(int r =0; r<crfoutput.rows; r++){
 				for(int c=0; c< crfoutput.cols; c++){
+//					cout<<crfoutput.at<Vec3b>(r,c)<<endl;
 
 					if(crfoutput.at<Vec3b>(r,c)==Vec3b(0,255,0)){
 						crfoutput.at<Vec3b>(r,c)=Vec3b(0,0,0);
@@ -635,16 +643,22 @@ Mat postprocess(Mat& frame, const vector<Mat>& outs, int& countFrame, int& count
 //			waitKey(0);
 
 			//Closing
-//			int morph_size = 1;
-//			Mat element = getStructuringElement( MORPH_RECT, Size( 2*morph_size + 1, 2*morph_size+1 ), Point( morph_size, morph_size ) );
-////			Mat dst;
-//			for (int i = 1; i < 3; i++) {
-//				morphologyEx(crfoutputG, crfoutputG, MORPH_CLOSE, element, Point(-1, -1), i);
-//				//morphologyEx( src, dst, MORPH_TOPHAT, element ); // here iteration=1
-////				imshow("source", crfoutputG);
-////				imshow("result", dst);
-////				waitKey(0);
-//			}
+			if (domorpho == 1) {
+				int morph_size = 1;
+				Mat element = getStructuringElement(MORPH_RECT,
+						Size(2 * morph_size + 1, 2 * morph_size + 1),
+						Point(morph_size, morph_size));
+				//			Mat dst;
+				for (int i = 1; i < 3; i++) {
+					morphologyEx(crfoutputG, crfoutputG, MORPH_CLOSE, element,
+							Point(-1, -1), i);
+					//morphologyEx( src, dst, MORPH_TOPHAT, element ); // here iteration=1
+					//				imshow("source", crfoutputG);
+					//				imshow("result", dst);
+					//				waitKey(0);
+				}
+			}
+
 
 			if (docrf == 1) {
 				string outputPath;
